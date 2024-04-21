@@ -60,6 +60,8 @@ class HandleAllocator {
 
     void _release(Index index)
     {
+      assert(_ref_counts[index] > 0);
+
       if (--_ref_counts[index] == 0) {
         _free_indices.push_back(index);
       }
@@ -72,6 +74,8 @@ class HandleAllocator {
       if (!allocator._free_indices.empty()) {
         Index index = allocator._free_indices.back();
         allocator._free_indices.pop_back();
+        ++_ref_counts[index];
+        assert(_ref_counts[index] == 1);
         return index;
       }
 
