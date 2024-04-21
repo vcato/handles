@@ -7,37 +7,28 @@
 class HandleAllocator {
   public:
     using RefCounts = std::vector<int>;
+    using Index = size_t;
 
     class Handle {
       public:
-        Handle(HandleAllocator &table, size_t index)
-        : _table(table), _index(index)
+        Handle(HandleAllocator &allocator)
+        : _allocator(allocator), _index(allocator._acquireNewIndex())
         {
-          acquire();
         }
 
-        ~Handle() { release(); }
+        ~Handle() { _allocator._release(_index); }
 
         Handle(const Handle &arg)
-        : _table(arg._table), _index(arg._index)
+        : _allocator(arg._allocator), _index(arg._index)
         {
-          acquire();
+          _allocator._acquire(_index);
         }
 
-        Handle& operator=(const Handle &arg)
-        {
-          if (&arg != this) {
-            release();
-            _table = arg._table;
-            _index = arg._index;
-            acquire();
-          }
-
-          return *this;
-        }
+        Handle& operator=(const Handle &arg) = delete;
 
         friend bool operator==(const Handle &a, const Handle &b)
         {
+          if (&a._allocator != &b._allocator) return false;
           return a._index == b._index;
         }
 
@@ -48,43 +39,46 @@ class HandleAllocator {
 
         friend bool operator<(const Handle &a, const Handle &b)
         {
+          assert(&a._allocator == &b._allocator);
           return a._index < b._index;
         }
 
-        size_t index() const { return _index; };
+        Index index() const { return _index; };
 
       private:
-        HandleAllocator &_table;
-        size_t _index;
-
-        void acquire() { ++_table._ref_counts[_index]; }
-
-        void release()
-        {
-          if (--_table._ref_counts[_index] == 0) {
-            _table._free_indices.push_back(_index);
-          }
-        }
+        HandleAllocator &_allocator;
+        Index _index;
     };
-
-    Handle allocate()
-    {
-      if (!_free_indices.empty()) {
-        size_t index = _free_indices.back();
-        _free_indices.pop_back();
-        return Handle(*this, index);
-      }
-      
-      size_t n = _ref_counts.size();
-      _ref_counts.push_back(0);
-      return Handle(*this, n);
-    }
 
     const RefCounts &refCounts() const { return _ref_counts; }
 
   private:
     std::vector<int> _ref_counts;
-    std::vector<size_t> _free_indices;  // Free list to track unused indices
+    std::vector<Index> _free_indices;  // Free list to track unused indices
+
+    void _acquire(Index index) { ++_ref_counts[index]; }
+
+    void _release(Index index)
+    {
+      if (--_ref_counts[index] == 0) {
+        _free_indices.push_back(index);
+      }
+    }
+
+    Index _acquireNewIndex()
+    {
+      HandleAllocator &allocator = *this;
+
+      if (!allocator._free_indices.empty()) {
+        Index index = allocator._free_indices.back();
+        allocator._free_indices.pop_back();
+        return index;
+      }
+
+      Index n = allocator._ref_counts.size();
+      allocator._ref_counts.push_back(1);
+      return n;
+    }
 };
 
 
@@ -94,7 +88,8 @@ static void testBasics()
   using Handle = HandleAllocator::Handle;
 
   {
-    const Handle h1 = allocator.allocate();
+    const auto h1 = Handle(allocator);
+    assert(allocator.refCounts()[h1.index()] == 1);
 
     {
       const Handle h1a = h1;
@@ -103,7 +98,7 @@ static void testBasics()
     }
 
     assert(allocator.refCounts()[h1.index()] == 1);
-    const Handle h2 = allocator.allocate();
+    const auto h2 = Handle(allocator);
     assert(h2 != h1);
   }
 
@@ -112,9 +107,9 @@ static void testBasics()
   assert(allocator.refCounts()[1] == 0);
 
   {
-    const Handle h1 = allocator.allocate();
+    const auto h1 = Handle(allocator);
     assert(h1.index() == 0);
-    const Handle h2 = allocator.allocate();
+    const auto h2 = Handle(allocator);
     assert(h2.index() == 1);
   }
 }
@@ -125,9 +120,9 @@ static void testMap()
   HandleAllocator allocator;
   using Handle = HandleAllocator::Handle;
   std::map<Handle, int> m;
-  const Handle h1 = allocator.allocate();
+  auto h1 = Handle(allocator);
   m[h1] = 5;
-  const Handle h2 = allocator.allocate();
+  auto h2 = Handle(allocator);
   m[h2] = 7;
   assert(m[h1] == 5);
   assert(m[h2] == 7);
